@@ -1324,11 +1324,38 @@
 
   // ----- Service worker -----
   function setupSW() {
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW:', err));
-      });
-    }
+    if (!('serviceWorker' in navigator)) return;
+    window.addEventListener('load', async () => {
+      try {
+        const reg = await navigator.serviceWorker.register('sw.js');
+        // Force la vérification d'une nouvelle version à chaque chargement.
+        try { reg.update(); } catch (_) {}
+
+        // Quand une nouvelle version est trouvée, on demande au SW de prendre le relais.
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          if (!newWorker) return;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              // Nouvelle version installée → on rafraîchit le contrôleur.
+              newWorker.postMessage('skip-waiting');
+              toast('Nouvelle version disponible — rechargement…', 'ok');
+              setTimeout(() => window.location.reload(), 1200);
+            }
+          });
+        });
+
+        // Si le contrôleur change (nouveau SW actif), on recharge une fois.
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (refreshing) return;
+          refreshing = true;
+          window.location.reload();
+        });
+      } catch (err) {
+        console.warn('SW register failed:', err);
+      }
+    });
   }
 
   // ----- Bootstrap -----
