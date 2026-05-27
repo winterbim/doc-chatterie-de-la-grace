@@ -9,7 +9,7 @@
   const LOGO_KEY = STORAGE_PREFIX + 'logo';
   const LAST_DOC_KEY = STORAGE_PREFIX + 'lastDoc';
 
-  const BREEDER = {
+  const BREEDER_DEFAULT = {
     name: 'JIMENEZ Stéphanie',
     address: '16 Allée des Ormes, Appartement 158',
     city: '91100 Corbeil-Essonnes',
@@ -18,6 +18,13 @@
     siret: '83485738500019',
     place: 'Corbeil-Essonnes'
   };
+  const BREEDER_KEY = STORAGE_PREFIX + 'breeder';
+  const BREEDER_LOCKED_KEY = STORAGE_PREFIX + 'breederLocked';
+
+  // Proxy : BREEDER pointe vers state.breeder pour rester compatible avec le code existant.
+  const BREEDER = new Proxy({}, {
+    get(_, prop) { return (state.breeder || BREEDER_DEFAULT)[prop]; }
+  });
 
   const ROSE = '#ff4da6';
   const ROSE_DEEP = '#d6398a';
@@ -272,13 +279,33 @@
   // ----- État + persistance -----
   const state = {
     currentDoc: null,
-    data: {},      // { contractId: { fieldId: value } }
-    logo: null,    // dataURL
-    signatures: {} // { contractId: dataURL }
+    data: {},          // { contractId: { fieldId: value } }
+    logo: null,        // dataURL
+    signatures: {},    // { contractId: dataURL }
+    textOverrides: {}, // { contractId: [{h,p,intro,ul}] }  — texte des clauses modifié
+    editText: false,   // mode édition du texte des clauses
+    breeder: { ...BREEDER_DEFAULT }, // infos éleveur (modifiables, persistées)
+    breederLocked: true              // verrouillage des infos éleveur
   };
 
   function storeKey(contractId) { return STORAGE_PREFIX + 'doc.' + contractId; }
   function sigKey(contractId) { return STORAGE_PREFIX + 'sig.' + contractId; }
+  function textKey(contractId) { return STORAGE_PREFIX + 'text.' + contractId; }
+
+  // Renvoie les sections de texte actives (override utilisateur, sinon défaut).
+  function activeSections(contractId) {
+    return state.textOverrides[contractId] || CONTRACTS[contractId].sections;
+  }
+
+  // Clone profond de sections (sans références partagées sur les listes).
+  function cloneSections(sections) {
+    return sections.map(s => ({
+      h: s.h,
+      p: s.p,
+      intro: s.intro,
+      ul: s.ul ? [...s.ul] : undefined
+    }));
+  }
 
   function loadAll() {
     try {
@@ -287,8 +314,25 @@
         const raw = localStorage.getItem(storeKey(id));
         state.data[id] = raw ? JSON.parse(raw) : {};
         state.signatures[id] = localStorage.getItem(sigKey(id)) || null;
+        const txt = localStorage.getItem(textKey(id));
+        if (txt) {
+          try { state.textOverrides[id] = JSON.parse(txt); } catch (_) {}
+        }
       });
+      const brRaw = localStorage.getItem(BREEDER_KEY);
+      if (brRaw) {
+        try { state.breeder = { ...BREEDER_DEFAULT, ...JSON.parse(brRaw) }; } catch (_) {}
+      }
+      const locked = localStorage.getItem(BREEDER_LOCKED_KEY);
+      state.breederLocked = locked === null ? true : locked === '1';
     } catch (err) { console.warn('load failed', err); }
+  }
+
+  function saveBreeder() {
+    try {
+      localStorage.setItem(BREEDER_KEY, JSON.stringify(state.breeder));
+      localStorage.setItem(BREEDER_LOCKED_KEY, state.breederLocked ? '1' : '0');
+    } catch (err) { console.warn('saveBreeder failed', err); }
   }
 
   let saveTimer = null;
@@ -360,30 +404,186 @@
     ]);
   }
 
-  function renderTextBlock(sections) {
-    const block = e('div', { class: 'text-block' });
-    sections.forEach(s => {
-      if (s.h) block.append(e('h3', {}, s.h));
-      if (s.p) block.append(e('p', {}, s.p));
-      if (s.intro) block.append(e('p', {}, e('strong', {}, s.intro)));
-      if (s.ul) {
+  function saveText(contractId) {
+    try {
+      if (state.textOverrides[contractId]) {
+        localStorage.setItem(textKey(contractId), JSON.stringify(state.textOverrides[contractId]));
+      } else {
+        localStorage.removeItem(textKey(contractId));
+      }
+    } catch (err) { console.warn('saveText failed', err); }
+  }
+
+  // Crée un override mutable à partir du défaut (lazy clone).
+  function ensureOverride(contractId) {
+    if (!state.textOverrides[contractId]) {
+      state.textOverrides[contractId] = cloneSections(CONTRACTS[contractId].sections);
+    }
+    return state.textOverrides[contractId];
+  }
+
+  function makeEditable(node, onChange, placeholder) {
+    node.setAttribute('contenteditable', state.editText ? 'true' : 'false');
+    node.classList.add('editable-text');
+    if (placeholder) node.setAttribute('data-placeholder', placeholder);
+    node.addEventListener('input', () => {
+      onChange(node.innerText.trim());
+      markDirty();
+    });
+    // Empêche le HTML collé d'être inséré tel quel (paste = texte brut).
+    node.addEventListener('paste', ev => {
+      ev.preventDefault();
+      const text = (ev.clipboardData || window.clipboardData).getData('text/plain');
+      document.execCommand('insertText', false, text);
+    });
+    return node;
+  }
+
+  function renderTextBlock(contractId) {
+    const sections = activeSections(contractId);
+    const block = e('div', { class: 'text-block' + (state.editText ? ' editing' : '') });
+
+    sections.forEach((s, sectionIdx) => {
+      const setProp = (key, value) => {
+        const ov = ensureOverride(contractId);
+        ov[sectionIdx][key] = value;
+        saveText(contractId);
+      };
+
+      if (s.h !== undefined) {
+        const h = e('h3', {}, s.h);
+        makeEditable(h, v => setProp('h', v), 'Titre de section');
+        block.append(h);
+      }
+      if (s.p !== undefined) {
+        const p = e('p', {}, s.p);
+        makeEditable(p, v => setProp('p', v), 'Paragraphe…');
+        block.append(p);
+      }
+      if (s.intro !== undefined) {
+        const p = e('p', {}, e('strong', {}, s.intro));
+        const strong = p.querySelector('strong');
+        makeEditable(strong, v => setProp('intro', v), 'Introduction…');
+        block.append(p);
+      }
+      if (s.ul !== undefined) {
+        const ulWrap = e('div', { class: 'ul-wrap' });
         const ul = e('ul');
-        s.ul.forEach(li => ul.append(e('li', {}, li)));
-        block.append(ul);
+        s.ul.forEach((li, liIdx) => {
+          const liEl = e('li', {}, li);
+          const liText = e('span', { class: 'li-text' }, li);
+          liEl.innerHTML = '';
+          liEl.append(liText);
+          makeEditable(liText, v => {
+            const ov = ensureOverride(contractId);
+            ov[sectionIdx].ul[liIdx] = v;
+            saveText(contractId);
+          }, 'Élément de liste…');
+
+          if (state.editText) {
+            const rm = e('button', {
+              class: 'li-remove no-export',
+              type: 'button',
+              title: 'Supprimer',
+              onclick: () => {
+                const ov = ensureOverride(contractId);
+                ov[sectionIdx].ul.splice(liIdx, 1);
+                saveText(contractId);
+                renderContract(contractId);
+              }
+            }, '×');
+            liEl.append(rm);
+          }
+          ul.append(liEl);
+        });
+        ulWrap.append(ul);
+
+        if (state.editText) {
+          const add = e('button', {
+            class: 'li-add no-export',
+            type: 'button',
+            onclick: () => {
+              const ov = ensureOverride(contractId);
+              ov[sectionIdx].ul.push('Nouvel élément');
+              saveText(contractId);
+              renderContract(contractId);
+            }
+          }, '+ Ajouter un élément');
+          ulWrap.append(add);
+        }
+        block.append(ulWrap);
       }
     });
+
+    // Indicateur "texte modifié"
+    if (state.textOverrides[contractId]) {
+      const badge = e('div', { class: 'text-modified-banner' }, [
+        e('span', {}, '✎ Texte des clauses personnalisé pour ce contrat'),
+        e('button', {
+          class: 'btn ghost small no-export',
+          type: 'button',
+          onclick: () => {
+            if (confirm('Revenir au texte original des clauses ?')) {
+              delete state.textOverrides[contractId];
+              localStorage.removeItem(textKey(contractId));
+              renderContract(contractId);
+              toast('Texte original restauré', 'ok');
+            }
+          }
+        }, 'Rétablir l\'original')
+      ]);
+      block.prepend(badge);
+    }
+
     return block;
   }
 
   function renderBreederCard() {
+    const locked = state.breederLocked;
+
+    const mkField = (label, key, span = 1) => {
+      const input = e('input', { type: 'text', value: state.breeder[key] || '' });
+      if (locked) input.setAttribute('readonly', 'readonly');
+      input.addEventListener('input', () => {
+        state.breeder[key] = input.value;
+        saveBreeder();
+      });
+      return e('div', { class: 'field' + (span === 2 ? ' grid-full' : '') }, [
+        e('label', {}, label),
+        input
+      ]);
+    };
+
+    const lockBtn = e('button', {
+      class: 'btn small ' + (locked ? 'ghost' : 'primary'),
+      type: 'button',
+      title: locked ? 'Déverrouiller pour modifier' : 'Fixer les coordonnées (ne plus modifier)',
+      onclick: () => {
+        state.breederLocked = !state.breederLocked;
+        saveBreeder();
+        renderContract(state.currentDoc);
+        toast(state.breederLocked ? 'Coordonnées fixées' : 'Modification activée', 'ok');
+      }
+    }, locked ? '🔓 Modifier mes coordonnées' : '🔒 Fixer');
+
+    const header = e('div', { class: 'card-header' }, [
+      e('h3', { class: 'section-title', style: 'margin:0; padding:0; border:0' }, 'Éleveur'),
+      locked
+        ? e('span', { class: 'pill muted', style: 'margin-left:auto' }, '🔒 Verrouillé')
+        : e('span', { class: 'pill', style: 'margin-left:auto' }, '✎ Modification en cours'),
+      lockBtn
+    ]);
+
     return e('div', { class: 'card' }, [
-      e('h3', { class: 'section-title', style: 'margin-top:0' }, 'Éleveur'),
+      header,
       e('div', { class: 'grid-2' }, [
-        e('div', { class: 'field' }, [e('label', {}, 'Éleveur'), e('input', { type: 'text', value: BREEDER.name, readonly: 'readonly' })]),
-        e('div', { class: 'field' }, [e('label', {}, 'SIRET'), e('input', { type: 'text', value: BREEDER.siret, readonly: 'readonly' })]),
-        e('div', { class: 'field grid-full' }, [e('label', {}, 'Adresse'), e('input', { type: 'text', value: BREEDER.address + ', ' + BREEDER.city, readonly: 'readonly' })]),
-        e('div', { class: 'field' }, [e('label', {}, 'Téléphone'), e('input', { type: 'text', value: BREEDER.phone, readonly: 'readonly' })]),
-        e('div', { class: 'field' }, [e('label', {}, 'Email'), e('input', { type: 'text', value: BREEDER.email, readonly: 'readonly' })])
+        mkField('Nom de l\'éleveur', 'name'),
+        mkField('SIRET', 'siret'),
+        mkField('Adresse', 'address', 2),
+        mkField('Code postal + Ville', 'city'),
+        mkField('Lieu de signature', 'place'),
+        mkField('Téléphone', 'phone'),
+        mkField('Email', 'email')
       ])
     ]);
   }
@@ -447,7 +647,7 @@
 
     root.append(renderBreederCard());
     c.cards.forEach(card => root.append(renderCard(card, id)));
-    root.append(renderTextBlock(c.sections));
+    root.append(renderTextBlock(id));
     root.append(renderSignatureBlock(id));
 
     // Mettre à jour le label de signature quand le nom change
@@ -610,6 +810,95 @@
     } else {
       $('#brandPlaceholder').style.display = '';
     }
+  }
+
+  // ----- Mode édition du texte des clauses -----
+  function toggleTextEdit() {
+    state.editText = !state.editText;
+    updateEditButton();
+    renderContract(state.currentDoc);
+    toast(state.editText ? 'Mode édition activé' : 'Édition terminée', 'ok');
+  }
+
+  function updateEditButton() {
+    const btn = $('#btnEditText');
+    if (!btn) return;
+    if (state.editText) {
+      btn.textContent = '✓ Terminer l\'édition';
+      btn.classList.remove('ghost');
+      btn.classList.add('primary');
+    } else {
+      btn.textContent = '✎ Éditer le texte';
+      btn.classList.add('ghost');
+      btn.classList.remove('primary');
+    }
+  }
+
+  // ----- Prévisualisation PDF -----
+  async function previewPdf() {
+    if (!state.currentDoc) return;
+    if (typeof pdfMake === 'undefined') { toast('Module PDF non chargé', 'err'); return; }
+
+    showOverlay('Préparation de l\'aperçu…');
+    try {
+      const { pdf, filename } = currentPdf();
+      pdf.getDataUrl(dataUrl => {
+        hideOverlay();
+        showPreview(dataUrl, filename);
+      });
+    } catch (err) {
+      hideOverlay();
+      console.error(err);
+      toast('Erreur prévisualisation : ' + err.message, 'err');
+    }
+  }
+
+  function showPreview(dataUrl, filename) {
+    // ferme un éventuel aperçu existant
+    $('#previewModal')?.remove();
+
+    const close = () => $('#previewModal')?.remove();
+
+    const modal = e('div', { class: 'preview-modal', id: 'previewModal' }, [
+      e('div', { class: 'preview-card' }, [
+        e('div', { class: 'preview-header' }, [
+          e('div', {}, [
+            e('strong', {}, 'Aperçu du contrat'),
+            e('span', { class: 'preview-filename' }, filename)
+          ]),
+          e('div', { class: 'preview-actions' }, [
+            e('button', {
+              class: 'btn small',
+              type: 'button',
+              onclick: () => { close(); printDoc(); }
+            }, '🖨️ Imprimer'),
+            e('button', {
+              class: 'btn primary small',
+              type: 'button',
+              onclick: () => { close(); exportPdf(); }
+            }, '📄 Télécharger'),
+            e('button', {
+              class: 'btn ghost small',
+              type: 'button',
+              title: 'Fermer',
+              onclick: close
+            }, '✕')
+          ])
+        ]),
+        e('iframe', {
+          class: 'preview-frame',
+          src: dataUrl,
+          title: 'Aperçu PDF'
+        })
+      ])
+    ]);
+
+    modal.addEventListener('click', ev => { if (ev.target === modal) close(); });
+    document.addEventListener('keydown', function onKey(ev) {
+      if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
+    });
+
+    document.body.append(modal);
   }
 
   // ----- Reset -----
@@ -803,9 +1092,9 @@
       }
     });
 
-    // Texte du contrat
+    // Texte du contrat (utilise l'override utilisateur si présent)
     content.push(pdfSectionTitle('Clauses du contrat'));
-    content.push(...pdfTextSections(c.sections));
+    content.push(...pdfTextSections(activeSections(contractId)));
 
     // Lieu et date
     const signDate = getDate('sign_date') || formatDateFr(todayIso());
@@ -1065,6 +1354,9 @@
     $('#btnPrint').addEventListener('click', printDoc);
     $('#btnPdf').addEventListener('click', exportPdf);
     $('#btnReset').addEventListener('click', resetCurrent);
+    $('#btnEditText').addEventListener('click', toggleTextEdit);
+    $('#btnPreview').addEventListener('click', previewPdf);
+    updateEditButton();
 
     setupInstall();
     setupSW();
