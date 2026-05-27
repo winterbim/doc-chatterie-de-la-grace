@@ -834,17 +834,40 @@
     }
   }
 
-  // ----- Prévisualisation PDF -----
+  // ----- Prévisualisation PDF (PDF.js → canvas, fonctionne sur mobile) -----
+  let pdfjsReady = false;
+  function ensurePdfJs() {
+    if (pdfjsReady) return true;
+    const lib = window['pdfjsLib'] || window['pdfjs-dist/build/pdf'];
+    if (!lib) return false;
+    if (!lib.GlobalWorkerOptions.workerSrc) {
+      lib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+    window.pdfjsLib = lib;
+    pdfjsReady = true;
+    return true;
+  }
+
   async function previewPdf() {
     if (!state.currentDoc) return;
     if (typeof pdfMake === 'undefined') { toast('Module PDF non chargé', 'err'); return; }
+    if (!ensurePdfJs()) { toast('Module d\'aperçu non chargé', 'err'); return; }
 
     showOverlay('Préparation de l\'aperçu…');
     try {
       const { pdf, filename } = currentPdf();
-      pdf.getDataUrl(dataUrl => {
-        hideOverlay();
-        showPreview(dataUrl, filename);
+      pdf.getBuffer(async (buffer) => {
+        try {
+          // Important : Uint8Array (pdf.js consomme l'ArrayBuffer)
+          const data = new Uint8Array(buffer);
+          await openPreview(data, filename);
+        } catch (err) {
+          console.error(err);
+          toast('Erreur aperçu : ' + err.message, 'err');
+        } finally {
+          hideOverlay();
+        }
       });
     } catch (err) {
       hideOverlay();
@@ -853,16 +876,19 @@
     }
   }
 
-  function showPreview(dataUrl, filename) {
-    // ferme un éventuel aperçu existant
+  async function openPreview(pdfData, filename) {
     $('#previewModal')?.remove();
 
     const close = () => $('#previewModal')?.remove();
 
+    const pagesContainer = e('div', { class: 'preview-pages' });
+    const loading = e('div', { class: 'preview-loading' }, 'Rendu des pages…');
+    pagesContainer.append(loading);
+
     const modal = e('div', { class: 'preview-modal', id: 'previewModal' }, [
       e('div', { class: 'preview-card' }, [
         e('div', { class: 'preview-header' }, [
-          e('div', {}, [
+          e('div', { class: 'preview-title' }, [
             e('strong', {}, 'Aperçu du contrat'),
             e('span', { class: 'preview-filename' }, filename)
           ]),
@@ -885,11 +911,7 @@
             }, '✕')
           ])
         ]),
-        e('iframe', {
-          class: 'preview-frame',
-          src: dataUrl,
-          title: 'Aperçu PDF'
-        })
+        pagesContainer
       ])
     ]);
 
@@ -899,6 +921,39 @@
     });
 
     document.body.append(modal);
+
+    // Rendu des pages
+    try {
+      const pdfDoc = await window.pdfjsLib.getDocument({ data: pdfData }).promise;
+      loading.remove();
+
+      // Largeur cible : largeur du conteneur, capée à la résolution écran
+      const dpr = Math.max(window.devicePixelRatio || 1, 1);
+      const containerWidth = pagesContainer.clientWidth - 32; // padding
+
+      for (let i = 1; i <= pdfDoc.numPages; i++) {
+        const page = await pdfDoc.getPage(i);
+        const baseViewport = page.getViewport({ scale: 1 });
+        const cssScale = Math.min(containerWidth / baseViewport.width, 2);
+        const renderScale = cssScale * dpr;
+        const viewport = page.getViewport({ scale: renderScale });
+
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        canvas.style.width = (baseViewport.width * cssScale) + 'px';
+        canvas.style.height = (baseViewport.height * cssScale) + 'px';
+        canvas.className = 'preview-page';
+
+        const pageWrap = e('div', { class: 'preview-page-wrap' }, canvas);
+        pagesContainer.append(pageWrap);
+
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      }
+    } catch (err) {
+      console.error(err);
+      loading.textContent = 'Erreur de rendu : ' + err.message;
+    }
   }
 
   // ----- Reset -----

@@ -616,12 +616,41 @@ select:focus { outline: none; border-color: var(--rose); box-shadow: 0 0 0 3px v
   margin-top: 2px;
 }
 .preview-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.preview-frame {
+.preview-pages {
   flex: 1;
   width: 100%;
   border: 0;
   background: #525659;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
 }
+.preview-page-wrap {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+.preview-page {
+  display: block;
+  background: white;
+  box-shadow: 0 10px 30px rgba(0,0,0,.5);
+  border-radius: 2px;
+  max-width: 100%;
+  height: auto;
+}
+.preview-loading {
+  color: #cbd5e1;
+  font-weight: 600;
+  text-align: center;
+  padding: 40px 16px;
+  font-size: 14px;
+}
+.preview-title { min-width: 0; flex: 1; }
+.preview-title strong { display: block; font-size: 14px; color: var(--ink); }
 
 @media (max-width: 600px) {
   .preview-modal { padding: 0; }
