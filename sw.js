@@ -2,7 +2,7 @@
 // que les utilisateurs récupèrent toujours la dernière version dès qu'elle
 // est en ligne. Cache hors-ligne conservé pour les ressources lourdes.
 
-const CACHE = 'cdlg-contrats-v4';
+const CACHE = 'cdlg-contrats-v5';
 
 const PRECACHE = [
   './',

@@ -927,20 +927,31 @@
       const pdfDoc = await window.pdfjsLib.getDocument({ data: pdfData }).promise;
       loading.remove();
 
-      // Largeur cible : largeur du conteneur, capée à la résolution écran
-      const dpr = Math.max(window.devicePixelRatio || 1, 1);
-      const containerWidth = pagesContainer.clientWidth - 32; // padding
+      // iOS Safari limite l'aire totale d'un canvas (≈16 M px sur iPhone).
+      // On plafonne le DPR et l'aire pour rester sous la limite et économiser la mémoire.
+      const ua = navigator.userAgent || '';
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(ua);
+      const maxDpr = isMobile ? 1.5 : 2;
+      const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), maxDpr);
+      const MAX_CANVAS_PIXELS = isMobile ? 8_000_000 : 16_000_000;
+
+      const containerWidth = Math.max(pagesContainer.clientWidth - 32, 200);
 
       for (let i = 1; i <= pdfDoc.numPages; i++) {
         const page = await pdfDoc.getPage(i);
         const baseViewport = page.getViewport({ scale: 1 });
         const cssScale = Math.min(containerWidth / baseViewport.width, 2);
-        const renderScale = cssScale * dpr;
+
+        let renderScale = cssScale * dpr;
+        const pixels = baseViewport.width * renderScale * baseViewport.height * renderScale;
+        if (pixels > MAX_CANVAS_PIXELS) {
+          renderScale *= Math.sqrt(MAX_CANVAS_PIXELS / pixels);
+        }
         const viewport = page.getViewport({ scale: renderScale });
 
         const canvas = document.createElement('canvas');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
         canvas.style.width = (baseViewport.width * cssScale) + 'px';
         canvas.style.height = (baseViewport.height * cssScale) + 'px';
         canvas.className = 'preview-page';
@@ -953,6 +964,7 @@
     } catch (err) {
       console.error(err);
       loading.textContent = 'Erreur de rendu : ' + err.message;
+      pagesContainer.append(loading);
     }
   }
 
