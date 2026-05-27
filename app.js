@@ -927,13 +927,13 @@
       const pdfDoc = await window.pdfjsLib.getDocument({ data: pdfData }).promise;
       loading.remove();
 
-      // iOS Safari limite l'aire totale d'un canvas (≈16 M px sur iPhone).
-      // On plafonne le DPR et l'aire pour rester sous la limite et économiser la mémoire.
+      // Rendu retina : on respecte le devicePixelRatio réel pour éviter le flou.
+      // Le seul garde-fou est la taille maximale du canvas (iOS Safari plafonne
+      // l'aire totale autour de 16-67 M px selon le modèle ; on reste large dessous).
       const ua = navigator.userAgent || '';
       const isMobile = /iPhone|iPad|iPod|Android/i.test(ua);
-      const maxDpr = isMobile ? 1.5 : 2;
-      const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), maxDpr);
-      const MAX_CANVAS_PIXELS = isMobile ? 8_000_000 : 16_000_000;
+      const dpr = Math.max(window.devicePixelRatio || 1, 1);
+      const MAX_CANVAS_PIXELS = isMobile ? 14_000_000 : 24_000_000;
 
       const containerWidth = Math.max(pagesContainer.clientWidth - 32, 200);
 
@@ -943,7 +943,8 @@
         const cssScale = Math.min(containerWidth / baseViewport.width, 2);
 
         let renderScale = cssScale * dpr;
-        const pixels = baseViewport.width * renderScale * baseViewport.height * renderScale;
+        // Garde-fou : si l'aire dépasse la limite iOS, on réduit le scale juste ce qu'il faut
+        const pixels = (baseViewport.width * renderScale) * (baseViewport.height * renderScale);
         if (pixels > MAX_CANVAS_PIXELS) {
           renderScale *= Math.sqrt(MAX_CANVAS_PIXELS / pixels);
         }
@@ -952,6 +953,7 @@
         const canvas = document.createElement('canvas');
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
+        // CSS size = taille d'affichage logique (sans le facteur DPR)
         canvas.style.width = (baseViewport.width * cssScale) + 'px';
         canvas.style.height = (baseViewport.height * cssScale) + 'px';
         canvas.className = 'preview-page';
@@ -959,7 +961,13 @@
         const pageWrap = e('div', { class: 'preview-page-wrap' }, canvas);
         pagesContainer.append(pageWrap);
 
-        await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+        const renderCtx = canvas.getContext('2d', { alpha: false });
+        await page.render({
+          canvasContext: renderCtx,
+          viewport,
+          // Indique à pdf.js de rendre en haute qualité
+          intent: 'display'
+        }).promise;
       }
     } catch (err) {
       console.error(err);

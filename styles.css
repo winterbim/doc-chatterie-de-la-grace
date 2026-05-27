@@ -672,6 +672,10 @@ select:focus { outline: none; border-color: var(--rose); box-shadow: 0 0 0 3px v
   border-radius: 2px;
   max-width: 100%;
   height: auto;
+  /* Rendu net sur écrans retina — empêche le smoothing du navigateur
+     d'amoindrir la finesse du texte sortant de PDF.js */
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
 }
 .preview-loading {
   color: #cbd5e1;
