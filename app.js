@@ -918,6 +918,16 @@
     };
   }
 
+  function currentPdf() {
+    const c = CONTRACTS[state.currentDoc];
+    const data = state.data[state.currentDoc] || {};
+    const docDef = buildPdfDoc(state.currentDoc);
+    const client = sanitize(data.acq_name || 'Client');
+    const date = todayIso();
+    const filename = `${c.filename}_${client}_${date}.pdf`;
+    return { pdf: pdfMake.createPdf(docDef), filename };
+  }
+
   async function exportPdf() {
     if (!state.currentDoc) return;
     if (typeof pdfMake === 'undefined') {
@@ -926,21 +936,74 @@
     }
     showOverlay('Génération du PDF…');
     try {
-      const c = CONTRACTS[state.currentDoc];
-      const data = state.data[state.currentDoc] || {};
-      const docDef = buildPdfDoc(state.currentDoc);
-      const client = sanitize(data.acq_name || 'Client');
-      const date = todayIso();
-      const filename = `${c.filename}_${client}_${date}.pdf`;
-      await new Promise(resolve => {
-        pdfMake.createPdf(docDef).download(filename, resolve);
-      });
+      const { pdf, filename } = currentPdf();
+      await new Promise(resolve => pdf.download(filename, resolve));
       toast('PDF généré', 'ok');
     } catch (err) {
       console.error(err);
       toast('Erreur PDF : ' + err.message, 'err');
     } finally {
       hideOverlay();
+    }
+  }
+
+  // Impression : envoie le PDF à l'imprimante (AirPrint, Mopria, locale…).
+  // Fonctionne en PWA sur iOS et Android, et sur tous les navigateurs desktop.
+  async function printDoc() {
+    if (!state.currentDoc) return;
+    if (typeof pdfMake === 'undefined') {
+      toast('Module d\'impression non chargé', 'err');
+      return;
+    }
+    showOverlay('Préparation de l\'impression…');
+    try {
+      const { pdf, filename } = currentPdf();
+
+      // iOS Safari/PWA : window.open est souvent bloqué ou ne lance pas le dialog.
+      // → on télécharge le PDF, le Files app permettra de l'imprimer via AirPrint.
+      const ua = navigator.userAgent || '';
+      const isIOS = /iPad|iPhone|iPod/.test(ua) && !window.MSStream;
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+        || window.navigator.standalone === true;
+
+      if (isIOS) {
+        // Sur iPhone/iPad : ouvre le PDF dans un nouvel onglet quand c'est possible
+        // (Safari déclenche l'impression via Partager → Imprimer / AirPrint).
+        // En PWA installée, fallback sur téléchargement.
+        if (isStandalone) {
+          await new Promise(resolve => pdf.download(filename, resolve));
+          toast('PDF prêt — ouvrez Fichiers puis Partager → Imprimer', 'ok');
+        } else {
+          pdf.getBlob(blob => {
+            const url = URL.createObjectURL(blob);
+            const win = window.open(url, '_blank');
+            if (!win) {
+              // popup bloqué → forcer le téléchargement
+              const a = document.createElement('a');
+              a.href = url; a.download = filename;
+              document.body.appendChild(a); a.click(); a.remove();
+              toast('PDF prêt — Partager → Imprimer', 'ok');
+            } else {
+              toast('PDF ouvert — Partager → Imprimer', 'ok');
+            }
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+          });
+        }
+      } else {
+        // Android, desktop : pdfmake.print() ouvre le PDF dans une fenêtre
+        // et lance automatiquement le dialogue d'impression du navigateur,
+        // qui propose toutes les imprimantes du système (locale, réseau, AirPrint, Mopria).
+        pdf.print({}, window);
+        toast('Dialogue d\'impression ouvert', 'ok');
+      }
+    } catch (err) {
+      console.error(err);
+      toast('Erreur impression : ' + err.message, 'err');
+      // Dernier recours : impression du HTML.
+      try { window.print(); } catch (_) {}
+    } finally {
+      // Petit délai pour laisser le dialogue s'ouvrir avant de masquer l'overlay
+      setTimeout(hideOverlay, 600);
     }
   }
 
@@ -999,7 +1062,7 @@
     $('#docSelect').value = initial;
     renderContract(initial);
 
-    $('#btnPrint').addEventListener('click', () => window.print());
+    $('#btnPrint').addEventListener('click', printDoc);
     $('#btnPdf').addEventListener('click', exportPdf);
     $('#btnReset').addEventListener('click', resetCurrent);
 

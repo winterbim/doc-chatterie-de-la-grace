@@ -9,6 +9,7 @@ Application web professionnelle pour la gestion des contrats et documents offici
 - **Logo personnalisé** : glisser-déposer ou import d'une image — réinjectée dans tous les PDF.
 - **Signature manuscrite** : pad tactile / souris, conservée par contrat.
 - **Export PDF vectoriel** (pdfmake) : texte sélectionnable, qualité d'impression, ~80–150 ko.
+- **Impression directe** : envoie le PDF vers l'imprimante du système — AirPrint (iOS), Mopria/Cloud Print (Android), imprimante locale ou réseau (desktop). Fonctionne en PWA installée.
 - **PWA installable** : Android, iOS (via *Ajouter à l'écran d'accueil*), Windows/macOS.
 - **Hors-ligne** : service worker, l'application fonctionne sans connexion.
 
